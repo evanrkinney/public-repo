@@ -1,0 +1,123 @@
+{
+  "visualizations": {
+    "viz_submit_button": {
+      "type": "splunk.markdown",
+      "options": {
+        "content": "## **Submit to SOAR**",
+        "fontColor": "#FFFFFF",
+        "backgroundColor": "#0070F3"
+      },
+      "eventHandlers": [
+        {
+          "type": "drilldown.click",
+          "options": {
+            "actions": [
+              { "type": "unsetToken", "options": { "token": "t_show_errors" } },
+              { "type": "unsetToken", "options": { "token": "t_trigger_soar" } },
+              { "type": "refreshDataSource", "options": { "dataSourceId": "ds_validator" } }
+            ]
+          }
+        }
+      ]
+    },
+    "viz_error_table": {
+      "type": "splunk.table",
+      "dataSources": { "primary": "ds_validator" },
+      "showIf": "$t_show_errors$",
+      "title": "Validation Errors Found",
+      "description": "Please correct the following fields before submitting.",
+      "options": {
+        "columns": [{ "field": "error", "label": "Error" }]
+      }
+    },
+    "viz_soar_status": {
+      "type": "splunk.singlevalue",
+      "dataSources": { "primary": "ds_soar_submit" },
+      "showIf": "$t_trigger_soar$",
+      "title": "SOAR Submission",
+      "options": {
+        "majorValue": "> primary | seriesByName('status')",
+        "majorColor": "#118832"
+      }
+    }
+  },
+
+  "dataSources": {
+    "ds_validator": {
+      "type": "ds.search",
+      "options": {
+        "query": "| makeresults | eval first_name=\"$t_first_name$\", last_name=\"$t_last_name$\", email=\"$t_email$\", mnemonic=\"$t_mnemonic$\", comments=\"$t_comments$\", snow_url=\"$t_snow_url$\" | eval error=mvappend(if(match(email, \"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$\"), null(), \"Email format is invalid\"), if(match(snow_url, \"^https:\\/\\/.*\\.service-now\\.com\\/.*\"), null(), \"ServiceNow URL must be a valid https link\"), if(len(mnemonic) < 3, \"Mnemonic must be at least 3 characters\", null()), if(first_name==\"\" OR last_name==\"\", \"Name fields cannot be empty\", null())) | mvexpand error | table error | where isnotnull(error)"
+      },
+      "refresh": "0",
+      "refreshType": "manual",
+      "eventHandlers": [
+        {
+          "type": "search.done",
+          "options": {
+            "condition": "> 0",
+            "field": "job.resultCount"
+          },
+          "parameters": {
+            "t_show_errors": "true",
+            "t_trigger_soar": null
+          }
+        },
+        {
+          "type": "search.done",
+          "options": {
+            "condition": "== 0",
+            "field": "job.resultCount"
+          },
+          "parameters": {
+            "t_show_errors": null,
+            "t_trigger_soar": "true"
+          }
+        }
+      ]
+    },
+
+    "ds_soar_submit": {
+      "type": "ds.search",
+      "options": {
+        "query": "| makeresults | eval first_name=\"$t_first_name$\", last_name=\"$t_last_name$\", email=\"$t_email$\", mnemonic=\"$t_mnemonic$\", comments=\"$t_comments$\", snow_url=\"$t_snow_url$\" | sendalert sendtophantom param.phantom_server=\"Default Splunk SOAR\" param.sensitivity=\"amber\" param.severity=\"medium\" param.label=\"ds_form_intake\" | eval status=\"Submitted to SOAR\" | table status"
+      },
+      "refresh": "0",
+      "refreshType": "manual"
+    }
+  },
+
+  "inputs": {
+    "input_fn": { "type": "input.text", "title": "First Name", "options": { "token": "t_first_name", "defaultValue": "" } },
+    "input_ln": { "type": "input.text", "title": "Last Name", "options": { "token": "t_last_name", "defaultValue": "" } },
+    "input_em": { "type": "input.text", "title": "Email Address", "options": { "token": "t_email", "defaultValue": "" } },
+    "input_mn": { "type": "input.text", "title": "Mnemonic", "options": { "token": "t_mnemonic", "defaultValue": "" } },
+    "input_cm": { "type": "input.text", "title": "Comments", "options": { "token": "t_comments", "defaultValue": "" } },
+    "input_sn": { "type": "input.text", "title": "ServiceNow URL", "options": { "token": "t_snow_url", "defaultValue": "" } }
+  },
+
+  "layout": {
+    "type": "absolute",
+    "options": {
+      "width": 1024,
+      "height": 800,
+      "display": "auto-scale"
+    },
+    "globalInputs": ["input_fn", "input_ln", "input_em", "input_mn", "input_cm", "input_sn"],
+    "structure": [
+      { "item": "viz_submit_button", "type": "block", "position": { "x": 20, "y": 20,  "w": 200, "h": 50 } },
+      { "item": "viz_error_table",  "type": "block", "position": { "x": 20, "y": 90,  "w": 600, "h": 200 } },
+      { "item": "viz_soar_status",  "type": "block", "position": { "x": 20, "y": 310, "w": 600, "h": 100 } }
+    ]
+  },
+
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": { "queryParameters": { "earliest": "-15m", "latest": "now" } }
+      }
+    }
+  },
+
+  "title": "SOAR Playbook Submission Form",
+  "description": "Validates form input and dispatches to a Splunk SOAR playbook on success."
+}
