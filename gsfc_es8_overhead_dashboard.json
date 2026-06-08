@@ -1,0 +1,908 @@
+{
+  "version": "1.1.0",
+  "title": "GSFC \u00b7 ES8 Overwatch (PNC Power Link)",
+  "description": "Overhead TV dashboard for the Global Security Fusion Center: ES8 finding posture, rolling 8h closure activity, top closer, and top firing alert.",
+  "theme": "dark",
+  "defaults": {
+    "dataSources": {
+      "ds.search": {
+        "options": {
+          "queryParameters": {
+            "earliest": "-7d@d",
+            "latest": "now"
+          }
+        }
+      }
+    }
+  },
+  "inputs": {},
+  "dataSources": {
+    "ds_base": {
+      "type": "ds.search",
+      "name": "ES8 Findings Base",
+      "options": {
+        "query": "| from datamodel:\"Findings.All_Findings\"\n| eval _status = lower(coalesce('All_Findings.status_label', 'All_Findings.status', status_label, status))\n| eval severity = lower(coalesce('All_Findings.severity', severity, urgency, \"informational\"))\n| eval owner    = coalesce('All_Findings.owner', owner, \"unassigned\")\n| eval rule     = coalesce('All_Findings.search_name', search_name, source, \"unknown\")\n| eval mod_time = coalesce('All_Findings.mod_time', mod_time, _time)\n| eval status_group = case(\n        match(_status, \"(new|open|unassigned|in.?progress|pending|assigned|investigat)\"), \"open\",\n        match(_status, \"(closed|resolved|benign|true.?positive|false.?positive)\"),         \"closed\",\n        true(), \"other\")\n| eval is_open_now      = if(status_group=\"open\", 1, 0)\n| eval is_closed_recent = if(status_group=\"closed\" AND mod_time >= relative_time(now(),\"-8h\"), 1, 0)\n| eval is_fired_recent  = if(_time >= relative_time(now(),\"-8h\"), 1, 0)\n| eval sev_rank = case(severity=\"critical\",1, severity=\"high\",2, severity=\"medium\",3, severity=\"low\",4, true(),5)",
+        "queryParameters": {
+          "earliest": "-7d@d",
+          "latest": "now"
+        },
+        "refresh": "5m",
+        "refreshType": "delay"
+      }
+    },
+    "ds_open_critical": {
+      "type": "ds.chain",
+      "name": "Open Critical",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search is_open_now=1 severity=\"critical\" | stats count"
+      }
+    },
+    "ds_open_high": {
+      "type": "ds.chain",
+      "name": "Open High",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search is_open_now=1 severity=\"high\" | stats count"
+      }
+    },
+    "ds_open_medium": {
+      "type": "ds.chain",
+      "name": "Open Medium",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search is_open_now=1 severity=\"medium\" | stats count"
+      }
+    },
+    "ds_open_low": {
+      "type": "ds.chain",
+      "name": "Open Low",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search is_open_now=1 severity=\"low\" | stats count"
+      }
+    },
+    "ds_open_info": {
+      "type": "ds.chain",
+      "name": "Open Informational",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search is_open_now=1 severity=\"informational\" | stats count"
+      }
+    },
+    "ds_closed_8h": {
+      "type": "ds.chain",
+      "name": "Closed in 8h",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search is_closed_recent=1 | stats count"
+      }
+    },
+    "ds_closed_8h_spark": {
+      "type": "ds.chain",
+      "name": "Closed 8h sparkline",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search status_group=closed mod_time>=relative_time(now(),\"-8h\")\n| eval bucket = relative_time(mod_time, \"@30m\")\n| stats count by bucket\n| sort 0 bucket"
+      }
+    },
+    "ds_top_owner": {
+      "type": "ds.chain",
+      "name": "Top Owner 8h",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search is_closed_recent=1\n| stats count by owner\n| sort - count\n| head 1\n| eval label=owner, value=count\n| fields label value"
+      }
+    },
+    "ds_top_owner_table": {
+      "type": "ds.chain",
+      "name": "Owner leaderboard",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search is_closed_recent=1 owner!=\"unassigned\"\n| stats count as \"Closed\" by owner\n| sort - Closed\n| head 5\n| rename owner as \"Owner\""
+      }
+    },
+    "ds_top_alert": {
+      "type": "ds.chain",
+      "name": "Top Alert 8h",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search is_fired_recent=1\n| stats count by rule\n| sort - count\n| head 1\n| eval label=rule, value=count\n| fields label value"
+      }
+    },
+    "ds_top_alerts_table": {
+      "type": "ds.chain",
+      "name": "Top alerts table",
+      "options": {
+        "extend": "ds_base",
+        "query": "| search is_fired_recent=1\n| stats count as \"Fired\" by rule severity\n| sort - Fired\n| head 6\n| eval Severity = case(severity=\"critical\",\"Critical\",\n                       severity=\"high\",\"High\",\n                       severity=\"medium\",\"Medium\",\n                       severity=\"low\",\"Low\",\n                       true(),\"Informational\")\n| rename rule as \"Rule\"\n| fields Rule Severity Fired"
+      }
+    },
+    "ds_timeline": {
+      "type": "ds.chain",
+      "name": "Findings timeline",
+      "options": {
+        "extend": "ds_base",
+        "query": "| bucket _time span=15m\n| eval Severity = case(severity=\"critical\",\"Critical\",\n                       severity=\"high\",\"High\",\n                       severity=\"medium\",\"Medium\",\n                       severity=\"low\",\"Low\",\n                       true(),\"Informational\")\n| chart count over _time by Severity\n| eval Critical      = if(isnull('Critical'),0,'Critical'),\n       High          = if(isnull('High'),0,'High'),\n       Medium        = if(isnull('Medium'),0,'Medium'),\n       Low           = if(isnull('Low'),0,'Low'),\n       Informational = if(isnull('Informational'),0,'Informational')\n| fields _time Critical High Medium Low Informational\n| fillnull value=0"
+      }
+    }
+  },
+  "visualizations": {
+    "viz_logo_placeholder": {
+      "type": "splunk.markdown",
+      "options": {
+        "markdown": "<div style=\"display:flex;align-items:center;justify-content:center;height:100%;border:1px dashed #8A93A6;border-radius:8px;color:#8A93A6;font-size:10px;letter-spacing:3px;text-align:center;\">ADD<br/>LOGO</div>",
+        "backgroundColor": "transparent"
+      }
+    },
+    "viz_title": {
+      "type": "splunk.markdown",
+      "options": {
+        "markdown": "# <span style=\"color:#E6E8EE;letter-spacing:2px;\">GLOBAL SECURITY FUSION CENTER</span>\n## <span style=\"color:#FF3E55;letter-spacing:6px;font-weight:600;\">PNC&nbsp;POWER&nbsp;LINK&nbsp;\u00b7&nbsp;ES8 OVERWATCH</span>\n<span style=\"color:#8A93A6;font-size:14px;letter-spacing:3px;\">OPEN FINDINGS \u00b7 8-HOUR ROLLING WINDOW \u00b7 LIVE</span>",
+        "backgroundColor": "transparent"
+      }
+    },
+    "viz_clock": {
+      "type": "splunk.markdown",
+      "options": {
+        "markdown": "<div style=\"text-align:right;line-height:1.1;\"><span style=\"color:#8A93A6;font-size:12px;letter-spacing:4px;\">AUTO REFRESH</span><br/><span style=\"color:#E6E8EE;font-size:32px;font-weight:600;font-family:Inter,Helvetica,Arial,sans-serif;letter-spacing:2px;\">5&nbsp;MIN</span><br/><span style=\"color:#FF3E55;font-size:11px;letter-spacing:5px;\">\u25cf LIVE</span></div>",
+        "backgroundColor": "transparent"
+      }
+    },
+    "viz_sev_critical": {
+      "type": "splunk.singlevalue",
+      "title": "CRITICAL",
+      "options": {
+        "majorColor": "#FF3E55",
+        "majorFontSize": 110,
+        "unit": "FINDINGS",
+        "unitPosition": "after",
+        "unitColor": "#8A93A6",
+        "backgroundColor": "#15171C",
+        "sparklineDisplay": "off",
+        "trendDisplay": "off",
+        "showValue": "show",
+        "numberPrecision": 0
+      },
+      "dataSources": {
+        "primary": "ds_open_critical"
+      },
+      "encoding": {
+        "value": "primary.count"
+      }
+    },
+    "viz_sev_high": {
+      "type": "splunk.singlevalue",
+      "title": "HIGH",
+      "options": {
+        "majorColor": "#FF8E1A",
+        "majorFontSize": 110,
+        "unit": "FINDINGS",
+        "unitPosition": "after",
+        "unitColor": "#8A93A6",
+        "backgroundColor": "#15171C",
+        "sparklineDisplay": "off",
+        "trendDisplay": "off",
+        "showValue": "show",
+        "numberPrecision": 0
+      },
+      "dataSources": {
+        "primary": "ds_open_high"
+      },
+      "encoding": {
+        "value": "primary.count"
+      }
+    },
+    "viz_sev_medium": {
+      "type": "splunk.singlevalue",
+      "title": "MEDIUM",
+      "options": {
+        "majorColor": "#FFD024",
+        "majorFontSize": 110,
+        "unit": "FINDINGS",
+        "unitPosition": "after",
+        "unitColor": "#8A93A6",
+        "backgroundColor": "#15171C",
+        "sparklineDisplay": "off",
+        "trendDisplay": "off",
+        "showValue": "show",
+        "numberPrecision": 0
+      },
+      "dataSources": {
+        "primary": "ds_open_medium"
+      },
+      "encoding": {
+        "value": "primary.count"
+      }
+    },
+    "viz_sev_low": {
+      "type": "splunk.singlevalue",
+      "title": "LOW",
+      "options": {
+        "majorColor": "#1AC8FF",
+        "majorFontSize": 110,
+        "unit": "FINDINGS",
+        "unitPosition": "after",
+        "unitColor": "#8A93A6",
+        "backgroundColor": "#15171C",
+        "sparklineDisplay": "off",
+        "trendDisplay": "off",
+        "showValue": "show",
+        "numberPrecision": 0
+      },
+      "dataSources": {
+        "primary": "ds_open_low"
+      },
+      "encoding": {
+        "value": "primary.count"
+      }
+    },
+    "viz_sev_info": {
+      "type": "splunk.singlevalue",
+      "title": "INFORMATIONAL",
+      "options": {
+        "majorColor": "#9FA8BD",
+        "majorFontSize": 110,
+        "unit": "FINDINGS",
+        "unitPosition": "after",
+        "unitColor": "#8A93A6",
+        "backgroundColor": "#15171C",
+        "sparklineDisplay": "off",
+        "trendDisplay": "off",
+        "showValue": "show",
+        "numberPrecision": 0
+      },
+      "dataSources": {
+        "primary": "ds_open_info"
+      },
+      "encoding": {
+        "value": "primary.count"
+      }
+    },
+    "lbl_open": {
+      "type": "splunk.markdown",
+      "options": {
+        "markdown": "<span style=\"color:#8A93A6;letter-spacing:6px;font-size:12px;font-weight:600;\">OPEN ES8 FINDINGS BY CRITICALITY</span>",
+        "backgroundColor": "transparent"
+      }
+    },
+    "lbl_8h": {
+      "type": "splunk.markdown",
+      "options": {
+        "markdown": "<span style=\"color:#8A93A6;letter-spacing:6px;font-size:12px;font-weight:600;\">ROLLING 8-HOUR ACTIVITY</span>",
+        "backgroundColor": "transparent"
+      }
+    },
+    "lbl_owner": {
+      "type": "splunk.markdown",
+      "options": {
+        "markdown": "<span style=\"color:#8A93A6;letter-spacing:6px;font-size:12px;font-weight:600;\">TOP CLOSER \u00b7 8H</span>",
+        "backgroundColor": "transparent"
+      }
+    },
+    "lbl_alert": {
+      "type": "splunk.markdown",
+      "options": {
+        "markdown": "<span style=\"color:#8A93A6;letter-spacing:6px;font-size:12px;font-weight:600;\">TOP FIRING ALERT \u00b7 8H</span>",
+        "backgroundColor": "transparent"
+      }
+    },
+    "lbl_time": {
+      "type": "splunk.markdown",
+      "options": {
+        "markdown": "<span style=\"color:#8A93A6;letter-spacing:6px;font-size:12px;font-weight:600;\">FINDINGS TIMELINE \u00b7 7D</span>",
+        "backgroundColor": "transparent"
+      }
+    },
+    "viz_closed_count": {
+      "type": "splunk.singlevalue",
+      "options": {
+        "majorColor": "#65A637",
+        "majorFontSize": 110,
+        "unit": "CLOSED",
+        "unitPosition": "after",
+        "unitColor": "#8A93A6",
+        "backgroundColor": "#15171C",
+        "sparklineDisplay": "off",
+        "trendDisplay": "off",
+        "numberPrecision": 0
+      },
+      "dataSources": {
+        "primary": "ds_closed_8h"
+      },
+      "encoding": {
+        "value": "primary.count"
+      }
+    },
+    "viz_closed_spark": {
+      "type": "splunk.area",
+      "options": {
+        "backgroundColor": "#15171C",
+        "showXAxisWithLabels": false,
+        "showYAxisWithLabels": false,
+        "showGridLines": false,
+        "showRoundedY1AxisLabels": false,
+        "seriesColors": [
+          "#65A637"
+        ],
+        "legendDisplay": "off",
+        "areaOpacity": 0.35,
+        "lineWidth": 2
+      },
+      "dataSources": {
+        "primary": "ds_closed_8h_spark"
+      }
+    },
+    "viz_top_owner": {
+      "type": "splunk.singlevalue",
+      "options": {
+        "majorColor": "#F26196",
+        "majorFontSize": 78,
+        "unit": "CLOSED",
+        "unitPosition": "after",
+        "unitColor": "#8A93A6",
+        "backgroundColor": "#15171C",
+        "sparklineDisplay": "off",
+        "trendDisplay": "off",
+        "numberPrecision": 0
+      },
+      "dataSources": {
+        "primary": "ds_top_owner"
+      },
+      "encoding": {
+        "value": "primary.value",
+        "label": "primary.label"
+      }
+    },
+    "viz_top_owner_table": {
+      "type": "splunk.table",
+      "options": {
+        "backgroundColor": "#15171C",
+        "tableFormat": {
+          "rowBackgroundColors": [
+            "#15171C",
+            "#1A1D24"
+          ]
+        },
+        "rowNumbers": false,
+        "headerVisibility": "fixed",
+        "count": 5
+      },
+      "dataSources": {
+        "primary": "ds_top_owner_table"
+      }
+    },
+    "viz_top_alert": {
+      "type": "splunk.singlevalue",
+      "options": {
+        "majorColor": "#F8AB1D",
+        "majorFontSize": 60,
+        "unit": "FIRES",
+        "unitPosition": "after",
+        "unitColor": "#8A93A6",
+        "backgroundColor": "#15171C",
+        "sparklineDisplay": "off",
+        "trendDisplay": "off",
+        "numberPrecision": 0
+      },
+      "dataSources": {
+        "primary": "ds_top_alert"
+      },
+      "encoding": {
+        "value": "primary.value",
+        "label": "primary.label"
+      }
+    },
+    "viz_top_alerts_table": {
+      "type": "splunk.table",
+      "options": {
+        "backgroundColor": "#15171C",
+        "tableFormat": {
+          "rowBackgroundColors": [
+            "#15171C",
+            "#1A1D24"
+          ],
+          "cellColors": [
+            {
+              "field": "Severity",
+              "rules": [
+                {
+                  "type": "match",
+                  "value": "Critical",
+                  "format": {
+                    "color": "#FF3E55"
+                  }
+                },
+                {
+                  "type": "match",
+                  "value": "High",
+                  "format": {
+                    "color": "#FF8E1A"
+                  }
+                },
+                {
+                  "type": "match",
+                  "value": "Medium",
+                  "format": {
+                    "color": "#FFD024"
+                  }
+                },
+                {
+                  "type": "match",
+                  "value": "Low",
+                  "format": {
+                    "color": "#1AC8FF"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        "rowNumbers": false,
+        "headerVisibility": "fixed",
+        "count": 6
+      },
+      "dataSources": {
+        "primary": "ds_top_alerts_table"
+      }
+    },
+    "viz_timeline": {
+      "type": "splunk.area",
+      "options": {
+        "backgroundColor": "#15171C",
+        "stackMode": "stacked",
+        "areaOpacity": 0.75,
+        "lineWidth": 1,
+        "seriesColors": [
+          "#FF3E55",
+          "#FF8E1A",
+          "#FFD024",
+          "#1AC8FF",
+          "#9FA8BD"
+        ],
+        "showXAxisWithLabels": true,
+        "showYAxisWithLabels": true,
+        "showGridLines": false,
+        "xAxisLabelColor": "#8A93A6",
+        "yAxisLabelColor": "#8A93A6",
+        "legendDisplay": "right",
+        "legendLabelColor": "#E6E8EE"
+      },
+      "dataSources": {
+        "primary": "ds_timeline"
+      }
+    },
+    "card_header": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#15171C",
+        "fillOpacity": 1.0,
+        "strokeColor": "#1F2229",
+        "strokeWidth": 1,
+        "rx": 14
+      }
+    },
+    "card_critical": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#15171C",
+        "fillOpacity": 1.0,
+        "strokeColor": "#1F2229",
+        "strokeWidth": 1,
+        "rx": 14
+      }
+    },
+    "card_high": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#15171C",
+        "fillOpacity": 1.0,
+        "strokeColor": "#1F2229",
+        "strokeWidth": 1,
+        "rx": 14
+      }
+    },
+    "card_medium": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#15171C",
+        "fillOpacity": 1.0,
+        "strokeColor": "#1F2229",
+        "strokeWidth": 1,
+        "rx": 14
+      }
+    },
+    "card_low": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#15171C",
+        "fillOpacity": 1.0,
+        "strokeColor": "#1F2229",
+        "strokeWidth": 1,
+        "rx": 14
+      }
+    },
+    "card_info": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#15171C",
+        "fillOpacity": 1.0,
+        "strokeColor": "#1F2229",
+        "strokeWidth": 1,
+        "rx": 14
+      }
+    },
+    "card_closed": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#15171C",
+        "fillOpacity": 1.0,
+        "strokeColor": "#1F2229",
+        "strokeWidth": 1,
+        "rx": 14
+      }
+    },
+    "card_owner": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#15171C",
+        "fillOpacity": 1.0,
+        "strokeColor": "#1F2229",
+        "strokeWidth": 1,
+        "rx": 14
+      }
+    },
+    "card_alert": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#15171C",
+        "fillOpacity": 1.0,
+        "strokeColor": "#1F2229",
+        "strokeWidth": 1,
+        "rx": 14
+      }
+    },
+    "card_timeline": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#15171C",
+        "fillOpacity": 1.0,
+        "strokeColor": "#1F2229",
+        "strokeWidth": 1,
+        "rx": 14
+      }
+    },
+    "card_accent": {
+      "type": "splunk.rectangle",
+      "options": {
+        "fill": "#FF3E55",
+        "fillOpacity": 1.0,
+        "strokeColor": "#FF3E55",
+        "strokeWidth": 1,
+        "rx": 2
+      }
+    }
+  },
+  "layout": {
+    "type": "absolute",
+    "options": {
+      "width": 1920,
+      "height": 1080,
+      "display": "auto-scale",
+      "backgroundColor": "#0B0C0F"
+    },
+    "structure": [
+      {
+        "item": "card_header",
+        "type": "block",
+        "position": {
+          "x": 16,
+          "y": 16,
+          "w": 1888,
+          "h": 110
+        }
+      },
+      {
+        "item": "card_accent",
+        "type": "block",
+        "position": {
+          "x": 16,
+          "y": 122,
+          "w": 1888,
+          "h": 4
+        }
+      },
+      {
+        "item": "viz_logo_placeholder",
+        "type": "block",
+        "position": {
+          "x": 34,
+          "y": 30,
+          "w": 84,
+          "h": 84
+        }
+      },
+      {
+        "item": "viz_title",
+        "type": "block",
+        "position": {
+          "x": 136,
+          "y": 34,
+          "w": 1100,
+          "h": 80
+        }
+      },
+      {
+        "item": "viz_clock",
+        "type": "block",
+        "position": {
+          "x": 1584,
+          "y": 34,
+          "w": 300,
+          "h": 80
+        }
+      },
+      {
+        "item": "lbl_open",
+        "type": "block",
+        "position": {
+          "x": 20,
+          "y": 124,
+          "w": 600,
+          "h": 20
+        }
+      },
+      {
+        "item": "card_critical",
+        "type": "block",
+        "position": {
+          "x": 16,
+          "y": 150,
+          "w": 364,
+          "h": 240
+        }
+      },
+      {
+        "item": "card_high",
+        "type": "block",
+        "position": {
+          "x": 396,
+          "y": 150,
+          "w": 364,
+          "h": 240
+        }
+      },
+      {
+        "item": "card_medium",
+        "type": "block",
+        "position": {
+          "x": 776,
+          "y": 150,
+          "w": 364,
+          "h": 240
+        }
+      },
+      {
+        "item": "card_low",
+        "type": "block",
+        "position": {
+          "x": 1156,
+          "y": 150,
+          "w": 364,
+          "h": 240
+        }
+      },
+      {
+        "item": "card_info",
+        "type": "block",
+        "position": {
+          "x": 1536,
+          "y": 150,
+          "w": 364,
+          "h": 240
+        }
+      },
+      {
+        "item": "viz_sev_critical",
+        "type": "block",
+        "position": {
+          "x": 16,
+          "y": 150,
+          "w": 364,
+          "h": 240
+        }
+      },
+      {
+        "item": "viz_sev_high",
+        "type": "block",
+        "position": {
+          "x": 396,
+          "y": 150,
+          "w": 364,
+          "h": 240
+        }
+      },
+      {
+        "item": "viz_sev_medium",
+        "type": "block",
+        "position": {
+          "x": 776,
+          "y": 150,
+          "w": 364,
+          "h": 240
+        }
+      },
+      {
+        "item": "viz_sev_low",
+        "type": "block",
+        "position": {
+          "x": 1156,
+          "y": 150,
+          "w": 364,
+          "h": 240
+        }
+      },
+      {
+        "item": "viz_sev_info",
+        "type": "block",
+        "position": {
+          "x": 1536,
+          "y": 150,
+          "w": 364,
+          "h": 240
+        }
+      },
+      {
+        "item": "lbl_8h",
+        "type": "block",
+        "position": {
+          "x": 20,
+          "y": 380,
+          "w": 600,
+          "h": 20
+        }
+      },
+      {
+        "item": "card_closed",
+        "type": "block",
+        "position": {
+          "x": 16,
+          "y": 406,
+          "w": 600,
+          "h": 280
+        }
+      },
+      {
+        "item": "card_owner",
+        "type": "block",
+        "position": {
+          "x": 632,
+          "y": 406,
+          "w": 640,
+          "h": 280
+        }
+      },
+      {
+        "item": "card_alert",
+        "type": "block",
+        "position": {
+          "x": 1288,
+          "y": 406,
+          "w": 616,
+          "h": 280
+        }
+      },
+      {
+        "item": "viz_closed_count",
+        "type": "block",
+        "position": {
+          "x": 40,
+          "y": 456,
+          "w": 552,
+          "h": 140
+        }
+      },
+      {
+        "item": "viz_closed_spark",
+        "type": "block",
+        "position": {
+          "x": 40,
+          "y": 596,
+          "w": 552,
+          "h": 70
+        }
+      },
+      {
+        "item": "lbl_owner",
+        "type": "block",
+        "position": {
+          "x": 656,
+          "y": 422,
+          "w": 300,
+          "h": 18
+        }
+      },
+      {
+        "item": "viz_top_owner",
+        "type": "block",
+        "position": {
+          "x": 656,
+          "y": 442,
+          "w": 592,
+          "h": 100
+        }
+      },
+      {
+        "item": "viz_top_owner_table",
+        "type": "block",
+        "position": {
+          "x": 656,
+          "y": 548,
+          "w": 592,
+          "h": 124
+        }
+      },
+      {
+        "item": "lbl_alert",
+        "type": "block",
+        "position": {
+          "x": 1312,
+          "y": 422,
+          "w": 300,
+          "h": 18
+        }
+      },
+      {
+        "item": "viz_top_alert",
+        "type": "block",
+        "position": {
+          "x": 1312,
+          "y": 442,
+          "w": 568,
+          "h": 100
+        }
+      },
+      {
+        "item": "viz_top_alerts_table",
+        "type": "block",
+        "position": {
+          "x": 1312,
+          "y": 548,
+          "w": 568,
+          "h": 124
+        }
+      },
+      {
+        "item": "lbl_time",
+        "type": "block",
+        "position": {
+          "x": 20,
+          "y": 676,
+          "w": 600,
+          "h": 20
+        }
+      },
+      {
+        "item": "card_timeline",
+        "type": "block",
+        "position": {
+          "x": 16,
+          "y": 702,
+          "w": 1888,
+          "h": 362
+        }
+      },
+      {
+        "item": "viz_timeline",
+        "type": "block",
+        "position": {
+          "x": 40,
+          "y": 726,
+          "w": 1840,
+          "h": 314
+        }
+      }
+    ],
+    "globalInputs": []
+  }
+}
