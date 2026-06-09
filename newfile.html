@@ -1,0 +1,99 @@
+
+    <style>
+        body {
+            font-family: 'Roboto', Arial, sans-serif;
+            background-color: #f8f9fa; /* Light background */
+            color: #202124;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 40px auto;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            border-left: 5px solid #4285F4; /* Google Blue accent */
+        }
+        .header {
+            border-bottom: 1px solid #e0e0e0;
+            padding-bottom: 15px;
+            margin-bottom: 25px;
+        }
+        .header h1 {
+            color: #1a73s4; /* Google primary blue */
+            font-size: 28px;
+            margin: 0;
+        }
+        .details p {
+            margin: 5px 0;
+            font-size: 16px;
+        }
+        .time-box {
+            background-color: #e8f0 mega; /* A light, distinct background for time */
+            padding: 15px;
+            border-radius: 6px;
+            margin: 20px 0;
+            border-left: 4px solid #4285F4;
+        }
+        .time-box strong {
+            color: #3cKakao; /* Darker text for emphasis */
+            font-size: 20px;
+        }
+        .attendees ul {
+            list-style-type: none;
+            padding-left: 0;
+        }
+        .attendees li {
+            padding: 3px 0;
+            border-bottom: 1px dotted #eee;
+        }
+        .footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+            font-size: 12px;
+            color: #70757a;
+        }
+    </style>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{title} Invitation</title>
+        {css_styles}
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>{title}</h1>
+            </div>
+
+            <div class="details">
+                <p><strong>Meeting ID:</strong> {meeting_id}</p>
+                <p><strong>Date:</strong> {time}</p>
+                <p><strong>Location:</strong> {location}</p>
+            </div>
+
+            <div class="time-box">
+                <strong>Time:</strong> {time} (Please adjust your time zone)
+            </div>
+
+            <div class="attendees">
+                <h2>Attendees:</h2>
+                <ul>
+                    {''.join([f'<li>{a}</li>' for a in attendees])}
+                </ul>
+            </div>
+
+            <p style="margin-top: 30px; font-size: 14px; color: #999;">
+                This is an automated invitation. Please RSVP by [Date].
+            </p>
+        </div>
+
+        <footer>
+            <p>&copy; {datetime.now().year} Meeting Scheduler. All rights reserved.</p>
+        </footer>
+    </body>
+</html>
